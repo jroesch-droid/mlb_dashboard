@@ -1,0 +1,9 @@
+HOW TO OPERATE THE APP:
+
+Command Prompt:
+
+cd C:\Users\YourName\Desktop\mlb-dashboard
+venv\Scripts\activate.bat
+python app.py
+
+Then open your browser and go to http://127.0.0.1:8050

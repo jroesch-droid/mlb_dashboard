@@ -1,0 +1,257 @@
+/* assets/style.css — MLB Analytics Dashboard */
+
+/* ── Reset & base ──────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: #020617;
+  color: #e2e8f0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+}
+
+/* ── App wrapper ───────────────────────────────────────────────────────────── */
+.app-wrapper {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Header ────────────────────────────────────────────────────────────────── */
+.header {
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  border-bottom: 2px solid #1d4ed8;
+  padding: 20px 32px 16px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.header-icon { font-size: 2rem; }
+
+.header-title {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: #f8fafc;
+  letter-spacing: -0.5px;
+}
+
+.header-subtitle {
+  font-size: 0.85rem;
+  color: #64748b;
+  margin-left: auto;
+  align-self: flex-end;
+}
+
+/* ── Tabs ───────────────────────────────────────────────────────────────────── */
+.main-tabs {
+  background: #0f172a;
+  border-bottom: 1px solid #1e293b !important;
+}
+
+.tab {
+  background: transparent !important;
+  border: none !important;
+  color: #64748b !important;
+  font-weight: 500;
+  padding: 12px 24px !important;
+  transition: color 0.2s;
+}
+
+.tab:hover { color: #e2e8f0 !important; }
+
+.tab--selected {
+  background: transparent !important;
+  border-bottom: 2px solid #3b82f6 !important;
+  color: #f8fafc !important;
+}
+
+/* ── Tab content ───────────────────────────────────────────────────────────── */
+.tab-content {
+  padding: 24px 32px;
+  flex: 1;
+}
+
+/* ── Controls row ──────────────────────────────────────────────────────────── */
+.controls-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-end;
+  margin-bottom: 20px;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  padding: 16px 20px;
+}
+
+.control-group { display: flex; flex-direction: column; gap: 6px; }
+.control-group--lg { flex: 1; min-width: 180px; }
+.control-group--btn { justify-content: flex-end; }
+.control-group--vs { justify-content: center; align-items: center; padding-top: 18px; }
+
+.control-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #64748b;
+}
+
+.text-input {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: #e2e8f0;
+  padding: 8px 12px;
+  font-size: 0.9rem;
+  outline: none;
+  width: 180px;
+  transition: border-color 0.2s;
+}
+
+.text-input:focus { border-color: #3b82f6; }
+
+/* Dropdowns */
+.dropdown .Select-control {
+  background: #1e293b !important;
+  border: 1px solid #334155 !important;
+  border-radius: 6px !important;
+  color: #e2e8f0 !important;
+}
+
+.dropdown .Select-menu-outer {
+  background: #1e293b !important;
+  border: 1px solid #334155 !important;
+}
+
+.dropdown .Select-option {
+  background: #1e293b !important;
+  color: #e2e8f0 !important;
+}
+
+.dropdown .Select-option.is-focused { background: #334155 !important; }
+.dropdown .Select-value-label { color: #e2e8f0 !important; }
+
+/* Buttons */
+.btn-primary {
+  background: #2563eb;
+  border: none;
+  border-radius: 7px;
+  color: #fff;
+  cursor: pointer;
+  font-size: 0.875rem;
+  font-weight: 600;
+  padding: 9px 22px;
+  transition: background 0.2s, transform 0.1s;
+  white-space: nowrap;
+}
+
+.btn-primary:hover  { background: #1d4ed8; transform: translateY(-1px); }
+.btn-primary:active { transform: translateY(0); }
+
+.vs-badge {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 50%;
+  color: #64748b;
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 6px 10px;
+}
+
+/* ── Status message ────────────────────────────────────────────────────────── */
+.status-msg {
+  font-size: 0.85rem;
+  color: #94a3b8;
+  margin-bottom: 16px;
+  min-height: 20px;
+}
+
+/* ── Charts grid ───────────────────────────────────────────────────────────── */
+.charts-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 20px;
+}
+
+.chart-card {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  padding: 16px 20px;
+}
+
+.chart-card--wide {
+  grid-column: 1 / -1;
+}
+
+.chart-title {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 8px;
+}
+
+.chart { width: 100%; }
+
+/* ── Form table ────────────────────────────────────────────────────────────── */
+.form-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+
+.form-table th {
+  background: #1e293b;
+  color: #64748b;
+  font-weight: 600;
+  padding: 6px 10px;
+  text-align: left;
+  border-bottom: 1px solid #334155;
+}
+
+.form-table td {
+  padding: 5px 10px;
+  border-bottom: 1px solid #1e293b;
+  color: #cbd5e1;
+}
+
+.table-row--win td  { border-left: 3px solid #22c55e; }
+.table-row--loss td { border-left: 3px solid #ef4444; }
+
+.no-data { color: #475569; font-style: italic; padding: 12px 0; }
+
+/* ── Model info bar ────────────────────────────────────────────────────────── */
+.model-info {
+  margin-top: 24px;
+  padding: 10px 16px;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.model-info p { font-size: 0.78rem; color: #475569; }
+
+/* ── Footer ────────────────────────────────────────────────────────────────── */
+.footer {
+  background: #0f172a;
+  border-top: 1px solid #1e293b;
+  color: #334155;
+  font-size: 0.75rem;
+  padding: 12px 32px;
+  text-align: center;
+}
+
+/* ── Responsive ────────────────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .charts-grid { grid-template-columns: 1fr; }
+  .chart-card--wide { grid-column: 1; }
+  .header-subtitle { display: none; }
+  .tab-content { padding: 16px; }
+}

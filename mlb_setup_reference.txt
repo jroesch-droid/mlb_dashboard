@@ -1,0 +1,202 @@
+================================================================================
+  MLB ANALYTICS DASHBOARD — SETUP & COMMANDS REFERENCE
+  Plain-text reference for terminal use
+================================================================================
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 1. INITIAL SETUP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# Create project directory
+mkdir mlb-dashboard && cd mlb-dashboard
+
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate          # Mac / Linux
+venv\Scripts\activate             # Windows
+
+# Install all dependencies
+pip install dash plotly pybaseball pandas numpy xgboost scikit-learn shap gunicorn
+
+# Save requirements
+pip freeze > requirements.txt
+
+# Initialize git repo
+git init
+echo "venv/" >> .gitignore
+echo "__pycache__/" >> .gitignore
+echo "*.pkl" >> .gitignore
+echo ".env" >> .gitignore
+git add . && git commit -m "Initial project setup"
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 2. FOLDER STRUCTURE (create these files/folders)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+mlb-dashboard/
+├── app.py                    Main Dash app & entry point
+├── requirements.txt          All pip dependencies
+├── README.md                 Project overview + demo GIF
+│
+├── data/
+│   ├── fetch_data.py         pybaseball data fetching functions
+│   ├── feature_eng.py        Feature engineering pipeline
+│   └── cache/                Locally cached CSVs (add to .gitignore)
+│
+├── model/
+│   ├── train_model.py        XGBoost training + evaluation script
+│   ├── evaluate.py           Metrics, confusion matrix, ROC curve
+│   └── model.pkl             Saved trained model (add to .gitignore)
+│
+├── components/
+│   ├── player_tab.py         Player Performance tab layout + callbacks
+│   └── prediction_tab.py     Game Prediction tab layout + callbacks
+│
+└── assets/
+    └── style.css             Custom Dash styles
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 3. DATA FETCHING COMMANDS (run in Python / Jupyter)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+from pybaseball import (playerid_lookup, statcast_batter, statcast_pitcher,
+                        batting_stats, pitching_stats, schedule_and_record,
+                        team_batting, team_pitching)
+
+# Look up a player ID
+player = playerid_lookup('judge', 'aaron')
+player_id = player.iloc[0]['key_mlbam']     # MLBAM ID (int)
+
+# Statcast batter data (pitch-by-pitch)
+df = statcast_batter('2024-04-01', '2024-10-01', player_id=player_id)
+
+# Season batting stats (all players)
+batting = batting_stats(2024)
+
+# Team schedule and results
+schedule = schedule_and_record(2024, 'NYY')   # Use 3-letter team code
+
+# Cache data locally to avoid re-fetching
+batting.to_csv('data/cache/batting_2024.csv', index=False)
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 4. TRAINING THE MODEL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# Run training script
+python model/train_model.py
+
+# Expected output:
+#   Accuracy : 0.63
+#   AUC-ROC  : 0.69
+#   Model saved → model/model.pkl
+
+# Load the model in the app
+import pickle
+model = pickle.load(open('model/model.pkl', 'rb'))
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 5. RUNNING THE APP LOCALLY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# Dev mode (auto-reloads on file save)
+python app.py
+
+# Production mode (test before deploying)
+gunicorn app:server
+
+# App runs at:  http://127.0.0.1:8050
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 6. DEPLOYMENT TO RENDER.COM
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Step 1 — Push to GitHub
+    git add .
+    git commit -m "Ready to deploy"
+    git push origin main
+
+Step 2 — Create Render service
+    1. Go to https://render.com → New → Web Service
+    2. Connect your GitHub repository
+    3. Set:
+         Build Command  : pip install -r requirements.txt
+         Start Command  : gunicorn app:server
+         Python Version : 3.11 (or 3.10)
+
+Step 3 — Environment Variables (optional)
+    Add in Render dashboard under "Environment":
+         PYTHON_VERSION = 3.11
+
+Step 4 — Deploy
+    Click "Create Web Service" → wait ~3 minutes
+    Your app is live at:  https://your-app-name.onrender.com
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 7. USEFUL GIT WORKFLOW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# Daily workflow
+git status
+git add .
+git commit -m "feat: add player comparison chart"
+git push
+
+# Recommended commit message prefixes:
+#   feat:    new feature
+#   fix:     bug fix
+#   data:    data pipeline changes
+#   model:   ML model changes
+#   style:   styling / UI tweaks
+#   docs:    README or comments
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 8. HELPFUL LINKS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Plotly Dash docs     https://dash.plotly.com
+pybaseball GitHub    https://github.com/jldbc/pybaseball
+XGBoost docs         https://xgboost.readthedocs.io
+SHAP docs            https://shap.readthedocs.io
+Statcast glossary    https://baseballsavant.mlb.com/glossary
+Render.com deploy    https://render.com/docs/deploy-dash
+FanGraphs stats      https://www.fangraphs.com/library
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 9. KEY MLB TEAM CODES (for pybaseball)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+NYY  New York Yankees       BOS  Boston Red Sox
+LAD  Los Angeles Dodgers    HOU  Houston Astros
+ATL  Atlanta Braves         CHC  Chicago Cubs
+NYM  New York Mets          SFG  San Francisco Giants
+PHI  Philadelphia Phillies  TOR  Toronto Blue Jays
+MIL  Milwaukee Brewers      ARI  Arizona Diamondbacks
+TEX  Texas Rangers          SEA  Seattle Mariners
+BAL  Baltimore Orioles      MIN  Minnesota Twins
+CLE  Cleveland Guardians    TBR  Tampa Bay Rays
+SDP  San Diego Padres       CIN  Cincinnati Reds
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 10. .gitignore TEMPLATE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+venv/
+__pycache__/
+*.pyc
+*.pkl
+.env
+data/cache/
+.DS_Store
+*.ipynb_checkpoints
+
+================================================================================
