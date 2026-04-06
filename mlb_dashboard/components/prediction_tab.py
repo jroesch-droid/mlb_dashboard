@@ -8,6 +8,7 @@ Tab 2 — Game Prediction
   • Recent form table (last 10 games)
 """
 
+import datetime
 import os
 import pickle
 import sys
@@ -57,16 +58,22 @@ TEAM_OPTIONS = [
 ]
 
 FEATURE_LABELS = {
-    "home_rolling_win_pct_10g": "Home Win % (L10)",
-    "away_rolling_win_pct_10g": "Away Win % (L10)",
-    "home_run_diff_15g":        "Home Run Diff (L15)",
-    "away_run_diff_15g":        "Away Run Diff (L15)",
-    "home_sp_era":              "Home SP ERA",
-    "home_sp_whip":             "Home SP WHIP",
-    "away_sp_era":              "Away SP ERA",
-    "away_sp_whip":             "Away SP WHIP",
-    "h2h_win_pct":              "Head-to-Head Win %",
-    "home_advantage":           "Home Advantage",
+    "home_win_pct_10":  "Home Win % (L10)",
+    "home_win_pct_20":  "Home Win % (L20)",
+    "away_win_pct_10":  "Away Win % (L10)",
+    "away_win_pct_20":  "Away Win % (L20)",
+    "home_run_diff_15": "Home Run Diff (L15)",
+    "away_run_diff_15": "Away Run Diff (L15)",
+    "home_streak":      "Home Win Streak",
+    "away_streak":      "Away Win Streak",
+    "home_rest_days":   "Home Rest Days",
+    "away_rest_days":   "Away Rest Days",
+    "h2h_win_pct":      "Head-to-Head Win %",
+    "home_sp_era":      "Home SP ERA",
+    "home_sp_whip":     "Home SP WHIP",
+    "away_sp_era":      "Away SP ERA",
+    "away_sp_whip":     "Away SP WHIP",
+    "home_advantage":   "Home Advantage",
 }
 
 
@@ -109,8 +116,8 @@ def prediction_tab_layout():
                         html.Label("Season", className="control-label"),
                         dcc.Dropdown(
                             id="pred-season",
-                            options=[{"label": str(y), "value": y} for y in range(2024, 2018, -1)],
-                            value=2024,
+                            options=[{"label": str(y), "value": y} for y in range(datetime.date.today().year, 2018, -1)],
+                            value=datetime.date.today().year,
                             clearable=False,
                             className="dropdown",
                         ),
@@ -160,8 +167,8 @@ def prediction_tab_layout():
             html.Div(
                 className="model-info",
                 children=[
-                    html.P("Model: XGBoost · Features: 10 · Training data: 2019–2024 seasons"),
-                    html.P("Expected accuracy ~63% · AUC-ROC ~0.69"),
+                    html.P(f"Model: XGBoost · Features: 16 · Training data: 2019–{datetime.date.today().year} seasons"),
+                    html.P("Expected accuracy ~56% · AUC-ROC ~0.55"),
                 ],
             ),
         ],
@@ -185,7 +192,8 @@ def register_prediction_callbacks(app):
         prevent_initial_call=True,
     )
     def update_prediction(n_clicks, home_code, away_code, season):
-        from data.fetch_data import fetch_schedule
+        from data.fetch_data import fetch_mlb_games, TEAM_ID_MAP
+        from data.feature_eng import build_prediction_features_mlb, FEATURE_COLS
 
         if not home_code or not away_code:
             return _empty_fig("Select both teams"), _empty_fig(""), _no_table(), _no_table(), "⚠️  Select both teams."
@@ -199,23 +207,25 @@ def register_prediction_callbacks(app):
 
         model = pickle.load(open(MODEL_PATH, "rb"))
 
-        # Fetch schedules
+        # Fetch season games from the official MLB Stats API
         try:
-            home_sched = fetch_schedule(season, home_code)
-            away_sched = fetch_schedule(season, away_code)
+            games_df = fetch_mlb_games(season)
         except Exception as e:
-            msg = f"❌  Could not fetch schedule data: {e}"
-            return _empty_fig("Data error"), _empty_fig(""), _no_table(), _no_table(), msg
+            return _empty_fig("Data error"), _empty_fig(""), _no_table(), _no_table(), f"❌  MLB API error: {e}"
+
+        if games_df.empty:
+            return _empty_fig("No data"), _empty_fig(""), _no_table(), _no_table(), "❌  No game data found for this season."
+
+        home_id = TEAM_ID_MAP.get(home_code)
+        away_id = TEAM_ID_MAP.get(away_code)
+        if not home_id or not away_id:
+            return _empty_fig("Unknown team"), _empty_fig(""), _no_table(), _no_table(), f"❌  Unknown team code."
 
         # Build features
-        from data.feature_eng import build_game_features, FEATURE_COLS
-        features_df = build_game_features(
-            home_schedule=home_sched,
-            away_schedule=away_sched,
-            pitching_df=pd.DataFrame(),   # no SP lookup in quick mode
-            home_team_name=home_code,
-            away_team_name=away_code,
-        )
+        try:
+            features_df = build_prediction_features_mlb(home_id, away_id, games_df)
+        except ValueError as e:
+            return _empty_fig("Insufficient data"), _empty_fig(""), _no_table(), _no_table(), f"⚠️  {e}"
 
         X = features_df[FEATURE_COLS]
 
@@ -226,11 +236,14 @@ def register_prediction_callbacks(app):
         explainer = shap.TreeExplainer(model)
         shap_vals = explainer.shap_values(X)
 
-        # Charts
-        gauge_fig = _build_gauge(win_prob, home_code, away_code)
-        shap_fig  = _build_shap_bar(shap_vals[0], X.columns.tolist())
-        home_table = _build_form_table(home_sched)
-        away_table = _build_form_table(away_sched)
+        # Recent form tables (from MLB API game data)
+        home_recent = _get_team_recent_games(games_df, home_id)
+        away_recent = _get_team_recent_games(games_df, away_id)
+
+        gauge_fig  = _build_gauge(win_prob, home_code, away_code)
+        shap_fig   = _build_shap_bar(shap_vals[0], X.columns.tolist())
+        home_table = _build_form_table_mlb(home_recent, home_id)
+        away_table = _build_form_table_mlb(away_recent, away_id)
 
         home_name = next((t["label"] for t in TEAM_OPTIONS if t["value"] == home_code), home_code)
         away_name = next((t["label"] for t in TEAM_OPTIONS if t["value"] == away_code), away_code)
@@ -356,6 +369,43 @@ def _build_form_table(schedule_df: pd.DataFrame) -> html.Div:
         className="form-table",
         children=[
             html.Thead(html.Tr([html.Th(c) for c in display_cols])),
+            html.Tbody(rows),
+        ],
+    )
+
+
+def _get_team_recent_games(games_df: pd.DataFrame, team_id: int, n: int = 10) -> pd.DataFrame:
+    """Return the last n games for a team from the MLB API games DataFrame."""
+    mask = (games_df["home_id"] == team_id) | (games_df["away_id"] == team_id)
+    return games_df[mask].sort_values("game_date").tail(n)
+
+
+def _build_form_table_mlb(recent: pd.DataFrame, team_id: int) -> html.Div:
+    """HTML table of last 10 games from MLB API data."""
+    if recent is None or recent.empty:
+        return _no_table()
+
+    rows = []
+    for _, g in recent.iterrows():
+        is_home  = int(g["home_id"]) == team_id
+        opp_name = g["away_name"] if is_home else g["home_name"]
+        runs_for = int(g["home_score"]) if is_home else int(g["away_score"])
+        runs_vs  = int(g["away_score"]) if is_home else int(g["home_score"])
+        won      = runs_for > runs_vs
+        result   = "W" if won else "L"
+        venue    = "vs" if is_home else "@"
+        row_cls  = "table-row--win" if won else "table-row--loss"
+        rows.append(html.Tr([
+            html.Td(str(g["game_date"])[:10]),
+            html.Td(f"{venue} {opp_name}"),
+            html.Td(f"{runs_for}–{runs_vs}"),
+            html.Td(result),
+        ], className=row_cls))
+
+    return html.Table(
+        className="form-table",
+        children=[
+            html.Thead(html.Tr([html.Th("Date"), html.Th("Opponent"), html.Th("Score"), html.Th("W/L")])),
             html.Tbody(rows),
         ],
     )

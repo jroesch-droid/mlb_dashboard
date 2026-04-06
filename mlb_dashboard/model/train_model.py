@@ -3,8 +3,13 @@ model/train_model.py
 ====================
 Train the XGBoost game-prediction model and save it to model/model.pkl.
 
+Data priority:
+  1. MLB Stats API  — official, free, never rate-limited (2019–2024)
+  2. pybaseball     — Baseball Reference scraping (may be blocked)
+  3. Synthetic data — last resort so the model always builds
+
 Usage:
-    python model\train_model.py
+    python model/train_model.py
 """
 
 import os
@@ -12,20 +17,26 @@ import pickle
 import sys
 import time
 
+# Force UTF-8 output so Unicode symbols (✓ ✗ ⚠️ ✅) don't crash on Windows cp1252
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
+
 import numpy as np
 import pandas as pd
 from sklearn.metrics import accuracy_score, roc_auc_score
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedKFold, train_test_split
 from xgboost import XGBClassifier
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from data.fetch_data import fetch_pitching_stats, fetch_schedule
-from data.feature_eng import FEATURE_COLS, TEAM_CODES, build_training_dataset
+from data.fetch_data import fetch_mlb_games, fetch_pitching_stats, fetch_schedule, TEAM_ID_MAP
+from data.feature_eng import (
+    FEATURE_COLS, TEAM_CODES,
+    build_training_dataset, build_training_dataset_mlb,
+)
 
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "model.pkl")
 
-# ── Enable pybaseball cache (adds rate limiting, prevents blocks) ──────────────
 try:
     from pybaseball import cache
     cache.enable()
@@ -33,86 +44,118 @@ try:
 except Exception:
     pass
 
-# ── 1. Fetch schedules with delays between requests ───────────────────────────
+# ── 1. Try MLB Stats API for 2019–2024 (most reliable) ───────────────────────
 
-YEAR = 2024
+YEARS = list(range(2019, 2027))
+print(f"\n── Phase 1: MLB Stats API ({YEARS[0]}–{YEARS[-1]}) ──────────────────────")
 
-print(f"\nFetching schedules for {len(TEAM_CODES)} teams ({YEAR})...")
-print("(Pausing 3s between requests to avoid being blocked by Baseball Reference)\n")
-
-schedules = {}
-for i, code in enumerate(TEAM_CODES):
+mlb_frames = []
+for year in YEARS:
     try:
-        schedules[code] = fetch_schedule(YEAR, code)
-        print(f"  ✓  {code}  ({len(schedules[code])} games)")
+        df = fetch_mlb_games(year)
+        if not df.empty:
+            df["year"] = year
+            mlb_frames.append(df)
+            print(f"  ✓  {year}: {len(df):,} games")
+        else:
+            print(f"  ✗  {year}: no data returned")
     except Exception as e:
-        print(f"  ✗  {code}: skipped")
+        print(f"  ✗  {year}: {e}")
 
-    # Pause between requests to be polite to Baseball Reference
-    if i < len(TEAM_CODES) - 1:
-        time.sleep(3)
+if mlb_frames:
+    all_games = pd.concat(mlb_frames, ignore_index=True)
+    print(f"\nBuilding features from {len(all_games):,} games...")
+    try:
+        train_df = build_training_dataset_mlb(all_games, pitching_df=pd.DataFrame())
+        print(f"  ✓  Feature rows: {len(train_df):,}")
+    except Exception as e:
+        print(f"  ✗  Feature engineering failed: {e}")
+        train_df = pd.DataFrame()
+else:
+    train_df = pd.DataFrame()
 
-print(f"\nSuccessfully loaded {len(schedules)} / {len(TEAM_CODES)} teams.")
+# ── 2. Fallback: pybaseball / Baseball Reference ─────────────────────────────
 
-# ── 2. If all requests failed, generate synthetic training data ───────────────
+if train_df.empty or len(train_df) < 200:
+    print("\n── Phase 2: pybaseball fallback (2024 only) ────────────────────────")
+    print("(3 s pause between requests to avoid Baseball Reference blocks)\n")
 
-if len(schedules) == 0:
-    print("\n⚠️  No schedule data retrieved from Baseball Reference.")
-    print("    Generating synthetic training data so the model can still be built.")
-    print("    Re-run after a few minutes to try fetching real data.\n")
+    schedules = {}
+    for i, code in enumerate(TEAM_CODES):
+        try:
+            schedules[code] = fetch_schedule(2024, code)
+            print(f"  ✓  {code}  ({len(schedules[code])} games)")
+        except Exception:
+            print(f"  ✗  {code}: skipped")
+        if i < len(TEAM_CODES) - 1:
+            time.sleep(3)
+
+    if schedules:
+        try:
+            pitching_df = fetch_pitching_stats(2024)
+        except Exception:
+            pitching_df = pd.DataFrame()
+        train_df = build_training_dataset(schedules, pitching_df)
+
+# ── 3. Last resort: synthetic data ───────────────────────────────────────────
+
+if train_df.empty or len(train_df) < 200:
+    print("\n⚠️  No real data available. Generating synthetic training set.")
+    print("    Re-run after a few minutes or check your internet connection.\n")
 
     np.random.seed(42)
-    n = 2000
+    n = 5000
 
-    # Simulate plausible MLB game features
-    home_win_pct  = np.random.beta(5, 5, n)
-    away_win_pct  = np.random.beta(5, 5, n)
-    home_run_diff = np.random.normal(0, 1.5, n)
-    away_run_diff = np.random.normal(0, 1.5, n)
-    home_sp_era   = np.random.normal(4.0, 0.8, n).clip(2.0, 7.0)
-    away_sp_era   = np.random.normal(4.0, 0.8, n).clip(2.0, 7.0)
-    home_sp_whip  = np.random.normal(1.25, 0.2, n).clip(0.8, 2.0)
-    away_sp_whip  = np.random.normal(1.25, 0.2, n).clip(0.8, 2.0)
-    h2h_win_pct   = np.random.beta(3, 3, n)
+    home_win_pct_10 = np.random.beta(5, 5, n)
+    home_win_pct_20 = np.random.beta(5, 5, n)
+    away_win_pct_10 = np.random.beta(5, 5, n)
+    away_win_pct_20 = np.random.beta(5, 5, n)
+    home_run_diff   = np.random.normal(0, 1.5, n)
+    away_run_diff   = np.random.normal(0, 1.5, n)
+    home_streak     = np.random.randint(-7, 8, n).astype(float)
+    away_streak     = np.random.randint(-7, 8, n).astype(float)
+    home_rest       = np.random.choice([1, 1, 1, 2, 3, 4], n).astype(float)
+    away_rest       = np.random.choice([1, 1, 1, 2, 3, 4], n).astype(float)
+    h2h_win_pct     = np.random.beta(3, 3, n)
+    home_sp_era     = np.random.normal(4.0, 0.8, n).clip(2.0, 7.0)
+    away_sp_era     = np.random.normal(4.0, 0.8, n).clip(2.0, 7.0)
+    home_sp_whip    = np.random.normal(1.25, 0.2, n).clip(0.8, 2.0)
+    away_sp_whip    = np.random.normal(1.25, 0.2, n).clip(0.8, 2.0)
 
-    # Win probability shaped by features (realistic signal + noise)
     logit = (
         0.15
-        + 1.2 * (home_win_pct - away_win_pct)
-        + 0.3 * (home_run_diff - away_run_diff)
-        - 0.2 * (home_sp_era - away_sp_era)
+        + 1.2  * (home_win_pct_10 - away_win_pct_10)
+        + 0.5  * (home_win_pct_20 - away_win_pct_20)
+        + 0.3  * (home_run_diff - away_run_diff)
+        + 0.05 * (home_streak - away_streak)
+        - 0.02 * (home_rest - away_rest)
+        - 0.2  * (home_sp_era - away_sp_era)
         - 0.15 * (home_sp_whip - away_sp_whip)
-        + 0.4 * (h2h_win_pct - 0.5)
+        + 0.4  * (h2h_win_pct - 0.5)
         + np.random.normal(0, 0.5, n)
     )
-    prob_home_win = 1 / (1 + np.exp(-logit))
-    labels = (np.random.uniform(size=n) < prob_home_win).astype(int)
+    prob = 1 / (1 + np.exp(-logit))
+    labels = (np.random.uniform(size=n) < prob).astype(int)
 
     train_df = pd.DataFrame({
-        "home_rolling_win_pct_10g": home_win_pct,
-        "away_rolling_win_pct_10g": away_win_pct,
-        "home_run_diff_15g":        home_run_diff,
-        "away_run_diff_15g":        away_run_diff,
-        "home_sp_era":              home_sp_era,
-        "home_sp_whip":             home_sp_whip,
-        "away_sp_era":              away_sp_era,
-        "away_sp_whip":             away_sp_whip,
-        "h2h_win_pct":              h2h_win_pct,
-        "home_advantage":           np.ones(n),
-        "label":                    labels,
+        "home_win_pct_10":  home_win_pct_10,
+        "home_win_pct_20":  home_win_pct_20,
+        "away_win_pct_10":  away_win_pct_10,
+        "away_win_pct_20":  away_win_pct_20,
+        "home_run_diff_15": home_run_diff,
+        "away_run_diff_15": away_run_diff,
+        "home_streak":      home_streak,
+        "away_streak":      away_streak,
+        "home_rest_days":   home_rest,
+        "away_rest_days":   away_rest,
+        "h2h_win_pct":      h2h_win_pct,
+        "home_sp_era":      home_sp_era,
+        "home_sp_whip":     home_sp_whip,
+        "away_sp_era":      away_sp_era,
+        "away_sp_whip":     away_sp_whip,
+        "home_advantage":   np.ones(n),
+        "label":            labels,
     })
-
-else:
-    # ── 3. Fetch pitching stats and engineer features ─────────────────────────
-    print("\nFetching pitching stats...")
-    try:
-        pitching_df = fetch_pitching_stats(YEAR)
-    except Exception as e:
-        print(f"  ✗  Pitching stats failed ({e}), using empty DataFrame")
-        pitching_df = pd.DataFrame()
-
-    print("\nEngineering features...")
-    train_df = build_training_dataset(schedules, pitching_df)
 
 # ── 4. Validate dataset ───────────────────────────────────────────────────────
 
@@ -120,7 +163,6 @@ print(f"\n  Dataset shape  : {train_df.shape}")
 
 if train_df.empty or len(train_df) < 50:
     print("\n❌  Not enough data to train. Try again in a few minutes.")
-    print("    Baseball Reference may be rate-limiting requests.")
     sys.exit(1)
 
 print(f"  Class balance  : {train_df['label'].value_counts().to_dict()}")
@@ -132,23 +174,59 @@ X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=42, stratify=y
 )
 
-# ── 5. Train model ────────────────────────────────────────────────────────────
+# ── 5. Cross-validation ───────────────────────────────────────────────────────
 
-print("\nTraining XGBoost model...")
+print("\nRunning 5-fold cross-validation...")
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+cv_scores = []
+
+for fold, (tr_idx, val_idx) in enumerate(cv.split(X_train, y_train), 1):
+    Xtr, Xval = X_train.iloc[tr_idx], X_train.iloc[val_idx]
+    ytr, yval = y_train.iloc[tr_idx], y_train.iloc[val_idx]
+
+    m = XGBClassifier(
+        n_estimators=500,
+        max_depth=5,
+        learning_rate=0.02,
+        subsample=0.8,
+        colsample_bytree=0.7,
+        min_child_weight=5,
+        gamma=0.1,
+        reg_lambda=1.0,
+        random_state=42,
+        eval_metric="logloss",
+        verbosity=0,
+    )
+    m.fit(Xtr, ytr, eval_set=[(Xval, yval)], verbose=False)
+    score = accuracy_score(yval, m.predict(Xval))
+    cv_scores.append(score)
+    print(f"  Fold {fold}: {score:.4f}")
+
+print(f"  CV mean: {np.mean(cv_scores):.4f}  ±  {np.std(cv_scores):.4f}")
+
+# ── 6. Train final model on full training split ───────────────────────────────
+
+print("\nTraining final model...")
 model = XGBClassifier(
-    n_estimators=200,
-    max_depth=4,
-    learning_rate=0.05,
+    n_estimators=500,
+    max_depth=5,
+    learning_rate=0.02,
     subsample=0.8,
-    colsample_bytree=0.8,
+    colsample_bytree=0.7,
+    min_child_weight=5,
+    gamma=0.1,
+    reg_lambda=1.0,
     random_state=42,
     eval_metric="logloss",
     verbosity=0,
 )
+model.fit(
+    X_train, y_train,
+    eval_set=[(X_test, y_test)],
+    verbose=False,
+)
 
-model.fit(X_train, y_train, eval_set=[(X_test, y_test)], verbose=False)
-
-# ── 6. Evaluate ───────────────────────────────────────────────────────────────
+# ── 7. Evaluate ───────────────────────────────────────────────────────────────
 
 y_pred  = model.predict(X_test)
 y_proba = model.predict_proba(X_test)[:, 1]
@@ -159,9 +237,10 @@ auc      = roc_auc_score(y_test, y_proba)
 print(f"\n{'='*40}")
 print(f"  Accuracy : {accuracy:.4f}")
 print(f"  AUC-ROC  : {auc:.4f}")
+print(f"  CV mean  : {np.mean(cv_scores):.4f}")
 print(f"{'='*40}")
 
-# ── 7. Save model ─────────────────────────────────────────────────────────────
+# ── 8. Save model ─────────────────────────────────────────────────────────────
 
 os.makedirs(os.path.dirname(MODEL_PATH), exist_ok=True)
 pickle.dump(model, open(MODEL_PATH, "wb"))
