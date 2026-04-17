@@ -9,6 +9,8 @@ Tab 1 — Player Performance
   • Stat comparison bar chart vs. league average
 """
 
+import datetime
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -51,8 +53,8 @@ def player_tab_layout():
                         html.Label("Season", className="control-label"),
                         dcc.Dropdown(
                             id="player-season",
-                            options=[{"label": str(y), "value": y} for y in range(2024, 2018, -1)],
-                            value=2024,
+                            options=[{"label": str(y), "value": y} for y in range(datetime.date.today().year, 2018, -1)],
+                            value=datetime.date.today().year,
                             clearable=False,
                             className="dropdown",
                         ),
@@ -151,8 +153,9 @@ def register_player_callbacks(app):
         try:
             batting_df = fetch_batting_stats(season)
             bar_fig = _build_league_avg_bar(batting_df, last, first)
-        except Exception:
-            bar_fig = _empty_fig("Could not load FanGraphs stats")
+        except Exception as e:
+            bar_fig = _empty_fig("FanGraphs stats unavailable")
+            status += f"  ⚠️  League comparison unavailable ({e})."
 
         return rolling_fig, ev_la_fig, bar_fig, status
 

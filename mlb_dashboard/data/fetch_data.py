@@ -5,7 +5,10 @@ All pybaseball data-fetching helpers.
 Results are cached as CSVs in data/cache/ to avoid repeated API calls.
 """
 
+import datetime
 import os
+import time as _time
+
 import pandas as pd
 
 # MLB Stats API team ID lookup (code → numeric ID used by statsapi)
@@ -42,6 +45,26 @@ def _load_or_fetch(cache_name: str, fetch_fn, *args, **kwargs) -> pd.DataFrame:
     """Return cached CSV if it exists, otherwise call fetch_fn and cache the result."""
     path = _cache_path(cache_name)
     if os.path.exists(path):
+        return pd.read_csv(path)
+    df = fetch_fn(*args, **kwargs)
+    df.to_csv(path, index=False)
+    return df
+
+
+_CACHE_TTL_SECONDS = 86_400  # 24 hours
+
+
+def _load_or_fetch_season(year: int, cache_name: str, fetch_fn, *args, **kwargs) -> pd.DataFrame:
+    """Like _load_or_fetch but re-fetches once per day for the current calendar year.
+
+    Historical seasons (year < current year) are cached forever; current-season
+    stats accumulate daily so stale data beyond 24 h is refreshed automatically.
+    """
+    path = _cache_path(cache_name)
+    current_year = datetime.date.today().year
+    cache_exists = os.path.exists(path)
+    cache_age    = _time.time() - os.path.getmtime(path) if cache_exists else float("inf")
+    if cache_exists and (year != current_year or cache_age < _CACHE_TTL_SECONDS):
         return pd.read_csv(path)
     df = fetch_fn(*args, **kwargs)
     df.to_csv(path, index=False)
@@ -116,18 +139,21 @@ def fetch_batting_stats(year: int, use_cache: bool = True) -> pd.DataFrame:
     """
     Full FanGraphs season batting stats for all qualified players.
     Includes BA, OBP, SLG, wOBA, wRC+, WAR, etc.
+    Current-year data is refreshed automatically after 24 h.
     """
     cache_name = f"batting_stats_{year}"
     if use_cache:
-        return _load_or_fetch(cache_name, batting_stats, year)
+        return _load_or_fetch_season(year, cache_name, batting_stats, year)
     return batting_stats(year)
 
 
 def fetch_pitching_stats(year: int, use_cache: bool = True) -> pd.DataFrame:
-    """Full FanGraphs season pitching stats for all qualified pitchers."""
+    """Full FanGraphs season pitching stats for all qualified pitchers.
+    Current-year data is refreshed automatically after 24 h.
+    """
     cache_name = f"pitching_stats_{year}"
     if use_cache:
-        return _load_or_fetch(cache_name, pitching_stats, year)
+        return _load_or_fetch_season(year, cache_name, pitching_stats, year)
     return pitching_stats(year)
 
 
@@ -137,28 +163,31 @@ def fetch_schedule(year: int, team_code: str, use_cache: bool = True) -> pd.Data
     """
     Fetch full season schedule and W/L record for a team.
     team_code examples: 'NYY', 'LAD', 'BOS'
+    Current-year data is refreshed automatically after 24 h.
     """
     cache_name = f"schedule_{year}_{team_code}"
     if use_cache:
-        return _load_or_fetch(
-            cache_name, schedule_and_record, year, team_code
-        )
+        return _load_or_fetch_season(year, cache_name, schedule_and_record, year, team_code)
     return schedule_and_record(year, team_code)
 
 
 def fetch_team_batting(year: int, use_cache: bool = True) -> pd.DataFrame:
-    """Aggregated team batting stats."""
+    """Aggregated team batting stats.
+    Current-year data is refreshed automatically after 24 h.
+    """
     cache_name = f"team_batting_{year}"
     if use_cache:
-        return _load_or_fetch(cache_name, team_batting, year)
+        return _load_or_fetch_season(year, cache_name, team_batting, year)
     return team_batting(year)
 
 
 def fetch_team_pitching(year: int, use_cache: bool = True) -> pd.DataFrame:
-    """Aggregated team pitching stats."""
+    """Aggregated team pitching stats.
+    Current-year data is refreshed automatically after 24 h.
+    """
     cache_name = f"team_pitching_{year}"
     if use_cache:
-        return _load_or_fetch(cache_name, team_pitching, year)
+        return _load_or_fetch_season(year, cache_name, team_pitching, year)
     return team_pitching(year)
 
 

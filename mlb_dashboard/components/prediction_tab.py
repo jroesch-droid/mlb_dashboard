@@ -23,6 +23,30 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "model", "model.pkl")
 
+# ── Module-level model cache ──────────────────────────────────────────────────
+# Loaded once on first prediction click; avoids re-deserialising on every request.
+
+_MODEL_CACHE: dict = {}
+
+
+def _get_model():
+    """Return (calibrated_model, xgb_for_shap), loading from disk if needed."""
+    if "model" not in _MODEL_CACHE:
+        if not os.path.exists(MODEL_PATH):
+            return None, None
+        artifact = pickle.load(open(MODEL_PATH, "rb"))
+        if isinstance(artifact, dict):
+            _MODEL_CACHE["model"]        = artifact["model"]
+            _MODEL_CACHE["xgb_for_shap"] = artifact.get("xgb_for_shap", artifact["model"])
+        elif isinstance(artifact, tuple):
+            _MODEL_CACHE["model"]        = artifact[0]
+            _MODEL_CACHE["xgb_for_shap"] = artifact[1] if len(artifact) > 1 else artifact[0]
+        else:
+            # Legacy: plain XGBoost saved directly
+            _MODEL_CACHE["model"]        = artifact
+            _MODEL_CACHE["xgb_for_shap"] = artifact
+    return _MODEL_CACHE.get("model"), _MODEL_CACHE.get("xgb_for_shap")
+
 # MLB team options
 TEAM_OPTIONS = [
     {"label": "Arizona Diamondbacks", "value": "ARI"},
@@ -58,12 +82,16 @@ TEAM_OPTIONS = [
 ]
 
 FEATURE_LABELS = {
+    "home_win_pct_5":   "Home Win % (L5)",
     "home_win_pct_10":  "Home Win % (L10)",
     "home_win_pct_20":  "Home Win % (L20)",
+    "away_win_pct_5":   "Away Win % (L5)",
     "away_win_pct_10":  "Away Win % (L10)",
     "away_win_pct_20":  "Away Win % (L20)",
     "home_run_diff_15": "Home Run Diff (L15)",
     "away_run_diff_15": "Away Run Diff (L15)",
+    "home_pyth_wp":     "Home Pythagorean W%",
+    "away_pyth_wp":     "Away Pythagorean W%",
     "home_streak":      "Home Win Streak",
     "away_streak":      "Away Win Streak",
     "home_rest_days":   "Home Rest Days",
@@ -73,7 +101,14 @@ FEATURE_LABELS = {
     "home_sp_whip":     "Home SP WHIP",
     "away_sp_era":      "Away SP ERA",
     "away_sp_whip":     "Away SP WHIP",
-    "home_advantage":   "Home Advantage",
+    "home_elo":         "Home Elo Rating",
+    "away_elo":         "Away Elo Rating",
+    "elo_diff":         "Elo Advantage",
+    "park_factor":      "Park Factor",
+    "win_pct_diff_10":  "Win % Diff (L10)",
+    "run_diff_diff":    "Run Diff Advantage",
+    "streak_diff":      "Streak Advantage",
+    "era_diff":         "ERA Advantage",
 }
 
 
@@ -134,41 +169,82 @@ def prediction_tab_layout():
                 ],
             ),
 
+            # ── SP inputs ─────────────────────────────────────────────────────
+            html.Div(
+                className="controls-row",
+                children=[
+                    html.Div([
+                        html.Label("Home Starting Pitcher (optional)", className="control-label"),
+                        dcc.Input(
+                            id="home-sp",
+                            type="text",
+                            placeholder="e.g. Gerrit Cole",
+                            debounce=True,
+                            className="text-input",
+                        ),
+                    ], className="control-group control-group--lg"),
+
+                    html.Div([
+                        html.Label("Away Starting Pitcher (optional)", className="control-label"),
+                        dcc.Input(
+                            id="away-sp",
+                            type="text",
+                            placeholder="e.g. Shane McClanahan",
+                            debounce=True,
+                            className="text-input",
+                        ),
+                    ], className="control-group control-group--lg"),
+
+                    html.Div(
+                        html.P(
+                            "Enter probable starters to use their real ERA · WHIP instead of league average",
+                            className="status-msg",
+                        ),
+                        className="control-group",
+                    ),
+                ],
+            ),
+
             # ── Status ────────────────────────────────────────────────────────
             html.Div(id="pred-status", className="status-msg"),
 
             # ── Charts ────────────────────────────────────────────────────────
-            html.Div(
-                className="charts-grid",
-                children=[
-                    html.Div([
-                        html.H3("Win Probability", className="chart-title"),
-                        dcc.Graph(id="prediction-gauge", className="chart"),
-                    ], className="chart-card"),
+            dcc.Loading(
+                id="prediction-loading",
+                type="circle",
+                color="#3b82f6",
+                children=html.Div(
+                    className="charts-grid",
+                    children=[
+                        html.Div([
+                            html.H3("Win Probability", className="chart-title"),
+                            dcc.Graph(id="prediction-gauge", className="chart"),
+                        ], className="chart-card"),
 
-                    html.Div([
-                        html.H3("SHAP Feature Contributions", className="chart-title"),
-                        dcc.Graph(id="shap-bar", className="chart"),
-                    ], className="chart-card"),
+                        html.Div([
+                            html.H3("SHAP Feature Contributions", className="chart-title"),
+                            dcc.Graph(id="shap-bar", className="chart"),
+                        ], className="chart-card"),
 
-                    html.Div([
-                        html.H3("Home Team — Last 10 Games", className="chart-title"),
-                        html.Div(id="home-form-table"),
-                    ], className="chart-card"),
+                        html.Div([
+                            html.H3("Home Team — Last 10 Games", className="chart-title"),
+                            html.Div(id="home-form-table"),
+                        ], className="chart-card"),
 
-                    html.Div([
-                        html.H3("Away Team — Last 10 Games", className="chart-title"),
-                        html.Div(id="away-form-table"),
-                    ], className="chart-card"),
-                ],
+                        html.Div([
+                            html.H3("Away Team — Last 10 Games", className="chart-title"),
+                            html.Div(id="away-form-table"),
+                        ], className="chart-card"),
+                    ],
+                ),
             ),
 
             # ── Model info ────────────────────────────────────────────────────
             html.Div(
                 className="model-info",
                 children=[
-                    html.P(f"Model: XGBoost · Features: 16 · Training data: 2019–{datetime.date.today().year} seasons"),
-                    html.P("Expected accuracy ~56% · AUC-ROC ~0.55"),
+                    html.P(f"Model: XGBoost + isotonic calibration · Features: 27 · Training data: 2019–{datetime.date.today().year} seasons"),
+                    html.P("Features include Elo ratings, park factors, Pythagorean W% · Probabilities calibrated · Expected accuracy ~57–59%"),
                 ],
             ),
         ],
@@ -189,23 +265,24 @@ def register_prediction_callbacks(app):
         Input("home-team", "value"),
         Input("away-team", "value"),
         Input("pred-season", "value"),
+        Input("home-sp", "value"),
+        Input("away-sp", "value"),
         prevent_initial_call=True,
     )
-    def update_prediction(n_clicks, home_code, away_code, season):
-        from data.fetch_data import fetch_mlb_games, TEAM_ID_MAP
-        from data.feature_eng import build_prediction_features_mlb, FEATURE_COLS
+    def update_prediction(n_clicks, home_code, away_code, season, home_sp, away_sp):
+        from data.fetch_data import fetch_mlb_games, fetch_pitching_stats, TEAM_ID_MAP
+        from data.feature_eng import build_prediction_features_mlb, build_sp_lookup, FEATURE_COLS
 
         if not home_code or not away_code:
             return _empty_fig("Select both teams"), _empty_fig(""), _no_table(), _no_table(), "⚠️  Select both teams."
         if home_code == away_code:
             return _empty_fig("Teams must differ"), _empty_fig(""), _no_table(), _no_table(), "⚠️  Home and away teams must be different."
 
-        # Load model
-        if not os.path.exists(MODEL_PATH):
+        # Load model (cached after first call)
+        model, xgb_for_shap = _get_model()
+        if model is None:
             msg = "❌  model.pkl not found. Run: python model/train_model.py"
             return _empty_fig("Model not trained"), _empty_fig(""), _no_table(), _no_table(), msg
-
-        model = pickle.load(open(MODEL_PATH, "rb"))
 
         # Fetch season games from the official MLB Stats API
         try:
@@ -219,21 +296,34 @@ def register_prediction_callbacks(app):
         home_id = TEAM_ID_MAP.get(home_code)
         away_id = TEAM_ID_MAP.get(away_code)
         if not home_id or not away_id:
-            return _empty_fig("Unknown team"), _empty_fig(""), _no_table(), _no_table(), f"❌  Unknown team code."
+            return _empty_fig("Unknown team"), _empty_fig(""), _no_table(), _no_table(), "❌  Unknown team code."
+
+        # Build SP lookup for current season
+        sp_lookup: dict = {}
+        try:
+            pitching_df = fetch_pitching_stats(season)
+            sp_lookup = build_sp_lookup(pitching_df)
+        except Exception:
+            pass
 
         # Build features
         try:
-            features_df = build_prediction_features_mlb(home_id, away_id, games_df)
+            features_df = build_prediction_features_mlb(
+                home_id, away_id, games_df,
+                home_sp=home_sp or "",
+                away_sp=away_sp or "",
+                sp_lookup=sp_lookup,
+            )
         except ValueError as e:
             return _empty_fig("Insufficient data"), _empty_fig(""), _no_table(), _no_table(), f"⚠️  {e}"
 
         X = features_df[FEATURE_COLS]
 
-        # Predict
+        # Predict (calibrated probabilities)
         win_prob = float(model.predict_proba(X)[0, 1])
 
-        # SHAP
-        explainer = shap.TreeExplainer(model)
+        # SHAP — use xgb_for_shap (TreeExplainer requires a native tree model)
+        explainer = shap.TreeExplainer(xgb_for_shap)
         shap_vals = explainer.shap_values(X)
 
         # Recent form tables (from MLB API game data)
@@ -245,11 +335,13 @@ def register_prediction_callbacks(app):
         home_table = _build_form_table_mlb(home_recent, home_id)
         away_table = _build_form_table_mlb(away_recent, away_id)
 
-        home_name = next((t["label"] for t in TEAM_OPTIONS if t["value"] == home_code), home_code)
-        away_name = next((t["label"] for t in TEAM_OPTIONS if t["value"] == away_code), away_code)
+        home_name  = next((t["label"] for t in TEAM_OPTIONS if t["value"] == home_code), home_code)
+        away_name  = next((t["label"] for t in TEAM_OPTIONS if t["value"] == away_code), away_code)
+        home_odds  = _prob_to_american(win_prob)
+        away_odds  = _prob_to_american(1 - win_prob)
         status = (
-            f"✅  {home_name} win probability: {win_prob*100:.1f}%  |  "
-            f"{away_name} win probability: {(1-win_prob)*100:.1f}%"
+            f"✅  {home_name}: {win_prob*100:.1f}% (implied {home_odds})  |  "
+            f"{away_name}: {(1-win_prob)*100:.1f}% (implied {away_odds})"
         )
 
         return gauge_fig, shap_fig, home_table, away_table, status
@@ -276,17 +368,30 @@ def _base_layout(height: int = 340) -> dict:
     )
 
 
+def _prob_to_american(p: float) -> str:
+    """Convert a win probability to American moneyline odds format."""
+    p = max(0.001, min(0.999, p))
+    if p > 0.5:
+        return f"-{round(100 * p / (1 - p))}"
+    elif p < 0.5:
+        return f"+{round(100 * (1 - p) / p)}"
+    return "±100"
+
+
 def _build_gauge(win_prob: float, home_code: str, away_code: str) -> go.Figure:
-    """Gauge chart showing home-team win probability."""
+    """Gauge chart showing home-team win probability with implied moneyline odds."""
     pct = round(win_prob * 100, 1)
     color = "#22c55e" if pct >= 60 else "#f59e0b" if pct >= 45 else "#ef4444"
+    home_odds = _prob_to_american(win_prob)
+    away_odds = _prob_to_american(1 - win_prob)
 
     fig = go.Figure(go.Indicator(
         mode="gauge+number+delta",
         value=pct,
         number={"suffix": "%", "font": {"size": 40, "color": "#e2e8f0"}},
         delta={"reference": 50, "suffix": "%", "font": {"size": 16}},
-        title={"text": f"{home_code} Win Probability", "font": {"size": 16, "color": "#e2e8f0"}},
+        title={"text": f"{home_code} {home_odds}  vs  {away_code} {away_odds}",
+               "font": {"size": 13, "color": "#94a3b8"}},
         gauge={
             "axis": {"range": [0, 100], "tickwidth": 1, "tickcolor": "#475569"},
             "bar":  {"color": color, "thickness": 0.3},
